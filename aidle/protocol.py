@@ -66,10 +66,15 @@ class ProtocolHandler:
         if not self._authenticated or self._username is None:
             return
         if self._session.state == State.IN_CHALLENGE:
-            # Cancel background task, snapshot elapsed, save
-            if self._session._bg_task and not self._session._bg_task.done():
-                self._session._bg_task.cancel()
-            self._session.snapshot_elapsed()
+            challenge = self._session.challenge
+            if challenge and getattr(challenge, "reached_goal", False):
+                # Challenge already completed — end cleanly so reconnect starts fresh
+                self._session.end()
+            else:
+                # Cancel background task, snapshot elapsed, save for resume
+                if self._session._bg_task and not self._session._bg_task.done():
+                    self._session._bg_task.cancel()
+                self._session.snapshot_elapsed()
             self._save()
         elif self._session.state == State.CONNECTED:
             self._save()
@@ -150,12 +155,17 @@ class ProtocolHandler:
             slug = saved_session.get("challenge_slug")
             challenge_state = saved_session.get("challenge_state")
             if slug and slug in REGISTRY and challenge_state:
-                challenge = REGISTRY[slug].from_dict(challenge_state, {})
-                self._session.resume(challenge, saved_session)
-                self._session._bg_task = asyncio.create_task(challenge.run_background())
-                resumed = True
-                session_state = "IN_CHALLENGE"
-                challenge_slug = slug
+                if challenge_state.get("reached_goal"):
+                    # Stale completed session — clear it so the user starts fresh
+                    user_data["session"] = None
+                    self._store.save(username, user_data)
+                else:
+                    challenge = REGISTRY[slug].from_dict(challenge_state, {})
+                    self._session.resume(challenge, saved_session)
+                    self._session._bg_task = asyncio.create_task(challenge.run_background())
+                    resumed = True
+                    session_state = "IN_CHALLENGE"
+                    challenge_slug = slug
 
         return _envelope(msg_id, "auth.login.ok", {
             "username": username,

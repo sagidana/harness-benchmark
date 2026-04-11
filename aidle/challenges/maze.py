@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+from collections import deque
 from typing import Any
 
 from aidle.challenges.base import (
@@ -124,15 +125,48 @@ class MazeChallenge(BaseChallenge):
     def _generate(self, seed: int | None) -> list[list[str]]:
         rng = random.Random(seed)
         size = self._size
-        grid = [[OPEN] * size for _ in range(size)]
-        # Scatter some walls (~20% of cells), never at start or goal
-        for r in range(size):
-            for c in range(size):
-                if (r, c) in ((0, 0), (size - 1, size - 1)):
-                    continue
-                if rng.random() < 0.20:
-                    grid[r][c] = WALL
-        return grid
+        start = (0, 0)
+        goal = (size - 1, size - 1)
+        # Regenerate until a path from start to goal exists
+        while True:
+            grid = [[OPEN] * size for _ in range(size)]
+            # Scatter some walls (~20% of cells), never at start or goal
+            for r in range(size):
+                for c in range(size):
+                    if (r, c) in (start, goal):
+                        continue
+                    if rng.random() < 0.20:
+                        grid[r][c] = WALL
+            if MazeChallenge._path_exists(grid, size, start, goal):
+                return grid
+
+    @staticmethod
+    def _path_exists(
+        grid: list[list[str]],
+        size: int,
+        start: tuple[int, int],
+        goal: tuple[int, int],
+        extra_blocked: tuple[int, int] | None = None,
+    ) -> bool:
+        """Return True if a passable path from start to goal exists in grid."""
+        visited = {start}
+        queue: deque[tuple[int, int]] = deque([start])
+        while queue:
+            r, c = queue.popleft()
+            if (r, c) == goal:
+                return True
+            for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                nr, nc = r + dr, c + dc
+                if (
+                    0 <= nr < size
+                    and 0 <= nc < size
+                    and (nr, nc) not in visited
+                    and (nr, nc) != extra_blocked
+                    and grid[nr][nc] not in (WALL, OBSTACLE)
+                ):
+                    visited.add((nr, nc))
+                    queue.append((nr, nc))
+        return False
 
     # ------------------------------------------------------------------
     # Serialization
@@ -345,7 +379,8 @@ class MazeChallenge(BaseChallenge):
             self._move_obstacle()
 
     def _spawn_obstacle(self) -> None:
-        # Find a free open cell that is not the player's position or goal
+        # Find a free open cell that is not the player's position or goal,
+        # and that does not make the goal unreachable from the player's position.
         candidates = [
             (r, c)
             for r in range(self._size)
@@ -353,6 +388,9 @@ class MazeChallenge(BaseChallenge):
             if self._grid[r][c] == OPEN
             and (r, c) != self._pos
             and (r, c) != self._goal
+            and MazeChallenge._path_exists(
+                self._grid, self._size, self._pos, self._goal, extra_blocked=(r, c)
+            )
         ]
         if not candidates:
             return
