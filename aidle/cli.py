@@ -3,6 +3,7 @@ import logging
 import click
 from aidle import server
 from aidle.client import MazeClient
+from aidle import mcp_server
 
 
 @click.group()
@@ -37,3 +38,16 @@ def play(host, port, seed, log_level):
     uri = f"ws://{host}:{port}"
     client = MazeClient(uri, seed=seed)
     asyncio.run(client.run())
+
+
+@main.command()
+@click.option("--server", "server_uri", default="ws://127.0.0.1:8765", show_default=True,
+              help="aidle WebSocket server URI.")
+@click.option("--log-level", default="WARNING", show_default=True,
+              type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"], case_sensitive=False),
+              help="Logging level (stderr).")
+def mcp(server_uri, log_level):
+    """Start an MCP server (stdio) that exposes aidle tools to an LLM."""
+    logging.basicConfig(level=log_level.upper(),
+                        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    mcp_server.run(server_uri)
