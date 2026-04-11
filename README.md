@@ -1,6 +1,6 @@
 # aidle
 
-A CLI tool with a WebSocket server.
+A CLI tool that runs a WebSocket challenge/game server implementing the [WCGP v1.0 protocol](docs/PROTOCOL.md).
 
 ## Installation
 
@@ -37,6 +37,10 @@ Example:
 ```bash
 aidle serve --host 127.0.0.1 --port 9000 --log-level DEBUG
 ```
+
+## Protocol
+
+See [docs/PROTOCOL.md](docs/PROTOCOL.md) for the full WCGP v1.0 specification: message envelope, all message types, cost accounting model, challenge extensibility, and a worked maze example.
 
 ## License
 
