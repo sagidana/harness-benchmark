@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 import websockets
@@ -11,6 +12,7 @@ from websockets import ServerConnection
 from aidle.challenges import REGISTRY
 from aidle.challenges.base import ActionResult, BaseChallenge
 from aidle.session import Session, State
+from aidle.storage import UserStore
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +39,13 @@ def _error(msg_id: str | None, base_type: str, code: str, message: str, detail: 
 class ProtocolHandler:
     """Handles the WCGP protocol for a single WebSocket connection."""
 
-    def __init__(self, websocket: ServerConnection) -> None:
+    def __init__(self, websocket: ServerConnection, store: UserStore) -> None:
         self._ws = websocket
+        self._store = store
         self._session = Session()
+        self._username: str | None = None
+        self._token: str | None = None
+        self._authenticated = False
 
     async def run(self) -> None:
         addr = self._ws.remote_address
@@ -52,8 +58,21 @@ class ProtocolHandler:
         except websockets.ConnectionClosed:
             pass
         finally:
-            self._session.leave() if self._session.state == State.IN_CHALLENGE else None
+            self._on_disconnect()
             logger.info("Client disconnected: %s", addr)
+
+    def _on_disconnect(self) -> None:
+        """Persist state on disconnect so it survives reconnects."""
+        if not self._authenticated or self._username is None:
+            return
+        if self._session.state == State.IN_CHALLENGE:
+            # Cancel background task, snapshot elapsed, save
+            if self._session._bg_task and not self._session._bg_task.done():
+                self._session._bg_task.cancel()
+            self._session.snapshot_elapsed()
+            self._save()
+        elif self._session.state == State.CONNECTED:
+            self._save()
 
     # ------------------------------------------------------------------
     # Receive loop
@@ -66,11 +85,10 @@ class ProtocolHandler:
                 await self._ws.send(response)
 
     async def _dispatch(self, raw: str) -> str | None:
-        # Parse envelope
         try:
             msg = json.loads(raw)
         except json.JSONDecodeError:
-            return _error(None, "error", "MALFORMED_MESSAGE", "Message is not valid JSON.", {})
+            return _error(None, "error", "MALFORMED_MESSAGE", "Message is not valid JSON.")
 
         msg_id = msg.get("id")
         msg_type = msg.get("type")
@@ -85,6 +103,14 @@ class ProtocolHandler:
                           f"This server supports wcgp {PROTOCOL_VERSION} only.",
                           {"supported": [PROTOCOL_VERSION], "received": received})
 
+        # Auth must happen before anything else
+        if msg_type == "auth.login":
+            return await self._handle_auth(msg_id, payload)
+
+        if not self._authenticated:
+            return _error(msg_id, msg_type, "UNAUTHENTICATED",
+                          "You must authenticate first. Send auth.login with your username.")
+
         # Route by scope
         parts = msg_type.split(".", 1)
         scope = parts[0]
@@ -93,13 +119,68 @@ class ProtocolHandler:
             verb = parts[1] if len(parts) > 1 else ""
             return await self._handle_session(msg_id, msg_type, verb, payload)
 
-        # Challenge-scoped
         if scope in REGISTRY:
             verb = parts[1] if len(parts) > 1 else ""
             return await self._handle_challenge_action(msg_id, msg_type, scope, verb, payload)
 
-        return _error(msg_id, msg_type, "UNKNOWN_TYPE",
-                      f"Unknown message type: {msg_type!r}.")
+        return _error(msg_id, msg_type, "UNKNOWN_TYPE", f"Unknown message type: {msg_type!r}.")
+
+    # ------------------------------------------------------------------
+    # Authentication
+    # ------------------------------------------------------------------
+
+    async def _handle_auth(self, msg_id: str | None, payload: dict) -> str:
+        username = payload.get("username", "").strip()
+        if not username:
+            return _error(msg_id, "auth.login", "MISSING_PARAM",
+                          "Field 'username' is required.")
+
+        user_data, created = self._store.get_or_create(username)
+        self._username = username
+        self._token = user_data["token"]
+        self._authenticated = True
+
+        # Restore session if one was saved
+        resumed = False
+        session_state = "CONNECTED"
+        challenge_slug = None
+        saved_session = user_data.get("session")
+
+        if saved_session and saved_session.get("state") == "IN_CHALLENGE":
+            slug = saved_session.get("challenge_slug")
+            challenge_state = saved_session.get("challenge_state")
+            if slug and slug in REGISTRY and challenge_state:
+                challenge = REGISTRY[slug].from_dict(challenge_state, {})
+                self._session.resume(challenge, saved_session)
+                self._session._bg_task = asyncio.create_task(challenge.run_background())
+                resumed = True
+                session_state = "IN_CHALLENGE"
+                challenge_slug = slug
+
+        return _envelope(msg_id, "auth.login.ok", {
+            "username": username,
+            "token": self._token,
+            "resumed": resumed,
+            "session_state": session_state,
+            "challenge_slug": challenge_slug,
+        })
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def _save(self) -> None:
+        if self._username is None:
+            return
+        user_data = self._store.load(self._username) or {}
+        user_data["username"] = self._username
+        user_data["token"] = self._token
+        if self._session.state in (State.IN_CHALLENGE, State.CONNECTED):
+            user_data["session"] = self._session.to_dict()
+        else:
+            # ENDED — clear saved session so next login starts fresh
+            user_data["session"] = None
+        self._store.save(self._username, user_data)
 
     # ------------------------------------------------------------------
     # Session handlers
@@ -160,9 +241,8 @@ class ProtocolHandler:
         options = payload.get("options", {}) or {}
         challenge: BaseChallenge = REGISTRY[slug](options)
         self._session.join(challenge)
-
-        # Start background task
         self._session._bg_task = asyncio.create_task(challenge.run_background())
+        self._save()
 
         return _envelope(msg_id, "session.join.ok", {
             "challenge_slug": slug,
@@ -203,6 +283,7 @@ class ProtocolHandler:
         self._session.record_action(base_cost)
         result = self._session.challenge.objective()
         result["cost"] = self._session.cost_block(action_cost=base_cost)
+        self._save()
         return _envelope(msg_id, "session.objective.ok", result)
 
     def _session_leave(self, msg_id: str | None, msg_type: str) -> str:
@@ -210,6 +291,7 @@ class ProtocolHandler:
             return err
         session_id = self._session.session_id
         self._session.leave()
+        self._save()
         return _envelope(msg_id, "session.leave.ok", {
             "session_id": session_id,
             "completed": False,
@@ -228,6 +310,7 @@ class ProtocolHandler:
         completed = challenge.reached_goal if hasattr(challenge, "reached_goal") else False
         session_id = self._session.session_id
         self._session.end()
+        self._save()
         summary = challenge.end_summary()
         summary["elapsed_seconds"] = self._session.elapsed_seconds()
         return _envelope(msg_id, "session.end.ok", {
@@ -268,9 +351,9 @@ class ProtocolHandler:
 
         cfg = self._session.challenge.cost_config()
         penalty = result.base_cost * cfg.invalid_action_multiplier if result.invalid else 0.0
-        total_action_cost = result.base_cost + penalty
 
         self._session.record_action(result.base_cost, penalty)
+        self._save()
 
         cost_block = self._session.cost_block(
             action_cost=result.base_cost,
@@ -295,7 +378,6 @@ class ProtocolHandler:
             challenge = self._session.challenge
             if challenge is None or self._session.state != State.IN_CHALLENGE:
                 continue
-            # Drain all queued push events
             while not challenge._push_queue.empty():
                 event = challenge._push_queue.get_nowait()
                 await self._ws.send(_push_envelope(event["type"], event["payload"]))

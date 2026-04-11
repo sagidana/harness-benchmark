@@ -134,6 +134,39 @@ class MazeChallenge(BaseChallenge):
                     grid[r][c] = WALL
         return grid
 
+    # ------------------------------------------------------------------
+    # Serialization
+    # ------------------------------------------------------------------
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "size": self._size,
+            "grid": self._grid,
+            "pos": list(self._pos),
+            "goal": list(self._goal),
+            "obstacles": {k: list(v) for k, v in self._obstacles.items()},
+            "obstacle_counter": self._obstacle_counter,
+            "reached_goal": self.reached_goal,
+            "moves_taken": self.moves_taken,
+            "options": self.options,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], options: dict[str, Any]) -> "MazeChallenge":
+        instance = cls.__new__(cls)
+        # Call BaseChallenge.__init__ manually to set up the push queue
+        super(MazeChallenge, instance).__init__(options)
+        instance.options = data.get("options", options)
+        instance._size = data["size"]
+        instance._grid = data["grid"]
+        instance._pos = tuple(data["pos"])
+        instance._goal = tuple(data["goal"])
+        instance._obstacles = {k: tuple(v) for k, v in data["obstacles"].items()}
+        instance._obstacle_counter = data["obstacle_counter"]
+        instance.reached_goal = data["reached_goal"]
+        instance.moves_taken = data["moves_taken"]
+        return instance
+
     def initial_state(self) -> dict[str, Any]:
         r, c = self._pos
         gr, gc = self._goal

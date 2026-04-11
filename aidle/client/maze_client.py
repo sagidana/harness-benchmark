@@ -30,8 +30,8 @@ class MazeClient(WCGPClient):
          or when a move is rejected (obstacle appeared between plan and execute).
     """
 
-    def __init__(self, uri: str, seed: int | None = None) -> None:
-        super().__init__(uri)
+    def __init__(self, uri: str, seed: int | None = None, username: str | None = None) -> None:
+        super().__init__(uri, username=username)
         self._seed = seed
         self._pos: tuple[int, int] = (0, 0)
         self._goal: tuple[int, int] = (0, 0)
@@ -82,20 +82,23 @@ class MazeClient(WCGPClient):
         spec = await self.introspect("maze")
         logger.info("Maze actions: %s", [a["type"] for a in spec["actions"]])
 
-        # 2. Join
-        join_resp = await self.join("maze", options={"seed": self._seed})
-        init = join_resp["initial_state"]
-        self._pos = (init["position"]["row"], init["position"]["col"])
-        self._goal = (init["goal"]["row"], init["goal"]["col"])
-        logger.info("Joined maze. Start: %s  Goal: %s", self._pos, self._goal)
+        # 2. Join — or resume if server already restored our session
+        resumed = self.auth_info.get("session_state") == "IN_CHALLENGE"
+        if resumed:
+            logger.info("Resuming existing maze session.")
+        else:
+            join_resp = await self.join("maze", options={"seed": self._seed})
+            init = join_resp["initial_state"]
+            self._pos = (init["position"]["row"], init["position"]["col"])
+            self._goal = (init["goal"]["row"], init["goal"]["col"])
+            logger.info("Joined maze. Start: %s  Goal: %s", self._pos, self._goal)
 
-        # 3. Objective (once)
-        obj = await self.get_objective()
-        logger.info("Objective: %s", obj["objective"])
-
-        # 4. Fetch map and display
-        self._grid = await self._fetch_grid()
-        logger.info("Map fetched (%dx%d)", len(self._grid), len(self._grid[0]))
+        # 3. Fetch map to sync local grid state (always needed — especially after resume)
+        raw = (await self.request("maze.get_map"))["payload"]
+        self._grid = raw["map"]
+        self._pos = (raw["position"]["row"], raw["position"]["col"])
+        self._goal = (raw["goal"]["row"], raw["goal"]["col"])
+        logger.info("Position: %s  Goal: %s", self._pos, self._goal)
         self._print_map(self._grid)
 
         # 5. Navigate

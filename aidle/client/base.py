@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import uuid
@@ -21,20 +22,36 @@ class WCGPClient:
     Push events are delivered via `on_event()`, which subclasses can override.
     """
 
-    def __init__(self, uri: str) -> None:
+    def __init__(self, uri: str, username: str | None = None) -> None:
         self._uri = uri
+        self._username = username
         self._ws: websockets.ClientConnection | None = None
         self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._running = False
+        self.auth_info: dict[str, Any] = {}  # populated after authenticate()
 
     # ------------------------------------------------------------------
     # Connection lifecycle
     # ------------------------------------------------------------------
 
     async def connect(self) -> None:
+        """Open the WebSocket connection. Does NOT authenticate — call run() for that."""
         self._ws = await websockets.connect(self._uri)
         self._running = True
         logger.info("Connected to %s", self._uri)
+
+    async def authenticate(self, username: str) -> dict[str, Any]:
+        """Send auth.login and return the server response payload."""
+        resp = await self.request("auth.login", {"username": username})
+        payload = resp["payload"]
+        self.auth_info = payload
+        logger.info(
+            "Authenticated as %r — resumed=%s session_state=%s",
+            payload.get("username"),
+            payload.get("resumed"),
+            payload.get("session_state"),
+        )
+        return payload
 
     async def disconnect(self) -> None:
         self._running = False
@@ -43,21 +60,19 @@ class WCGPClient:
             logger.info("Disconnected from %s", self._uri)
 
     async def run(self) -> None:
-        """Connect, run play() and the receive loop concurrently, then disconnect."""
+        """Connect, authenticate, run play(), then clean up."""
         await self.connect()
+        recv_task = asyncio.create_task(self._receive_loop())
         try:
-            await asyncio.gather(
-                self._receive_loop(),
-                self._play_wrapper(),
-            )
-        finally:
-            await self.disconnect()
-
-    async def _play_wrapper(self) -> None:
-        try:
+            if self._username:
+                await self.authenticate(self._username)
             await self.play()
         finally:
             self._running = False
+            recv_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await recv_task
+            await self.disconnect()
 
     async def _receive_loop(self) -> None:
         assert self._ws

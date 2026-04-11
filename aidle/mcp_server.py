@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 class _BufferingClient(WCGPClient):
     """WCGPClient that buffers push events instead of logging them."""
 
-    def __init__(self, uri: str) -> None:
-        super().__init__(uri)
+    def __init__(self, uri: str, username: str | None = None) -> None:
+        super().__init__(uri, username=username)
         self._event_buffer: list[dict[str, Any]] = []
 
     async def on_event(self, event: dict[str, Any]) -> None:
@@ -42,7 +42,7 @@ class _BufferingClient(WCGPClient):
 # MCP server factory
 # ---------------------------------------------------------------------------
 
-def create_mcp_server(server_uri: str) -> FastMCP:
+def create_mcp_server(server_uri: str, username: str | None = None) -> FastMCP:
     mcp = FastMCP(
         "aidle",
         instructions=(
@@ -56,7 +56,7 @@ def create_mcp_server(server_uri: str) -> FastMCP:
         ),
     )
 
-    client = _BufferingClient(server_uri)
+    client = _BufferingClient(server_uri, username=username)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -79,9 +79,11 @@ def create_mcp_server(server_uri: str) -> FastMCP:
     async def _ensure_connected() -> None:
         if client._ws is None or client._ws.close_code is not None:
             await client.connect()
-            # Start the receive loop as a background task if not already running
+            # Start receive loop BEFORE authenticating so request() futures can resolve
             if not hasattr(client, "_recv_task") or client._recv_task.done():
                 client._recv_task = asyncio.create_task(client._receive_loop())
+            if client._username:
+                await client.authenticate(client._username)
 
     # ------------------------------------------------------------------
     # Tools
@@ -239,7 +241,7 @@ def create_mcp_server(server_uri: str) -> FastMCP:
 # Entry point (called from cli.py)
 # ---------------------------------------------------------------------------
 
-def run(server_uri: str) -> None:
-    mcp_server = create_mcp_server(server_uri)
+def run(server_uri: str, username: str | None = None) -> None:
+    mcp_server = create_mcp_server(server_uri, username=username)
     logger.info("Starting aidle MCP server (stdio) — connecting to %s", server_uri)
     mcp_server.run(transport="stdio")

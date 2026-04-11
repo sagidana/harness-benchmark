@@ -119,6 +119,19 @@ class BaseChallenge(ABC):
         """Extra fields merged into session.end.ok summary."""
 
     # ------------------------------------------------------------------
+    # Serialization (for persistent sessions)
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize all challenge-specific state to a JSON-safe dict."""
+
+    @classmethod
+    @abstractmethod
+    def from_dict(cls, data: dict[str, Any], options: dict[str, Any]) -> "BaseChallenge":
+        """Restore a challenge instance from a previously serialized dict."""
+
+    # ------------------------------------------------------------------
     # Dynamic action availability (session.actions)
     # ------------------------------------------------------------------
 
