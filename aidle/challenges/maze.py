@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from collections import deque
 from typing import Any
@@ -12,6 +13,8 @@ from aidle.challenges.base import (
     CostConfig,
     EventDescriptor,
 )
+
+logger = logging.getLogger(__name__)
 
 # Cell types
 OPEN = "."
@@ -121,6 +124,7 @@ class MazeChallenge(BaseChallenge):
         self._obstacle_counter = 0
         self.reached_goal = False
         self.moves_taken = 0
+        logger.info("[maze] New game created — size=%d, goal=(%d,%d)", self._size, *self._goal)
 
     def _generate(self, seed: int | None) -> list[list[str]]:
         rng = random.Random(seed)
@@ -199,6 +203,8 @@ class MazeChallenge(BaseChallenge):
         instance._obstacle_counter = data["obstacle_counter"]
         instance.reached_goal = data["reached_goal"]
         instance.moves_taken = data["moves_taken"]
+        logger.info("[maze] Session resumed — pos=(%d,%d), goal=(%d,%d), moves=%d",
+                    *instance._pos, *instance._goal, instance.moves_taken)
         return instance
 
     def initial_state(self) -> dict[str, Any]:
@@ -276,6 +282,7 @@ class MazeChallenge(BaseChallenge):
     def _get_map(self) -> ActionResult:
         r, c = self._pos
         gr, gc = self._goal
+        logger.info("[maze] get_map — player at (%d,%d), goal at (%d,%d)", r, c, gr, gc)
         # Overlay current position marker
         display = [row[:] for row in self._grid]
         if display[r][c] not in (GOAL,):
@@ -298,6 +305,7 @@ class MazeChallenge(BaseChallenge):
 
     def _move(self, payload: dict[str, Any]) -> ActionResult:
         direction = payload.get("direction")
+        logger.info("[maze] move %s — from (%d,%d)", direction, *self._pos)
         if direction not in DIRECTIONS:
             return ActionResult(
                 payload={
@@ -337,8 +345,10 @@ class MazeChallenge(BaseChallenge):
         self._pos = (nr, nc)
         self.moves_taken += 1
         reached = (nr, nc) == self._goal
+        logger.info("[maze] moved to (%d,%d) — move #%d", nr, nc, self.moves_taken)
         if reached:
             self.reached_goal = True
+            logger.info("[maze] ★ Goal reached in %d moves!", self.moves_taken)
             self._push(
                 "maze.goal_reached",
                 {"position": {"row": nr, "col": nc}, "message": "You reached the goal!"},
@@ -399,6 +409,7 @@ class MazeChallenge(BaseChallenge):
         obs_id = f"obs-{self._obstacle_counter:03d}"
         self._obstacles[obs_id] = (r, c)
         self._grid[r][c] = OBSTACLE
+        logger.info("[maze] obstacle %s spawned at (%d,%d)", obs_id, r, c)
         self._push("maze.obstacle_created", {"position": {"row": r, "col": c}, "obstacle_id": obs_id})
 
     def _move_obstacle(self) -> None:
@@ -418,6 +429,7 @@ class MazeChallenge(BaseChallenge):
         self._grid[old_r][old_c] = OPEN
         self._grid[new_r][new_c] = OBSTACLE
         self._obstacles[obs_id] = (new_r, new_c)
+        logger.info("[maze] obstacle %s moved (%d,%d) -> (%d,%d)", obs_id, old_r, old_c, new_r, new_c)
         self._push(
             "maze.obstacle_moved",
             {
