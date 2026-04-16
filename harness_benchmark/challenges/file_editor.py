@@ -6,7 +6,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from aidle.challenges.base import (
+from harness_benchmark.challenges.base import (
     ActionDescriptor,
     ActionResult,
     BaseChallenge,

@@ -4,9 +4,9 @@ from pathlib import Path
 
 import click
 
-from aidle import server
-from aidle import mcp_server
-from aidle.client import MazeClient
+from harness_benchmark import server
+from harness_benchmark import mcp_server
+from harness_benchmark.client import MazeClient
 
 
 @click.group()
@@ -17,7 +17,7 @@ def main():
 @main.command()
 @click.option("--host", default="0.0.0.0", show_default=True, help="Host to bind.")
 @click.option("--port", default=8765, show_default=True, help="Port to listen on.")
-@click.option("--data-dir", default=None, type=click.Path(), help="Directory for user state files. Defaults to ~/.aidle/users/.")
+@click.option("--data-dir", default=None, type=click.Path(), help="Directory for user state files. Defaults to ~/.harness_benchmark/users/.")
 @click.option("--log-level", default="INFO", show_default=True,
               type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"], case_sensitive=False),
               help="Logging level.")
@@ -47,13 +47,13 @@ def play(host, port, username, seed, log_level):
 
 @main.command()
 @click.option("--server", "server_uri", default="ws://127.0.0.1:8765", show_default=True,
-              help="aidle WebSocket server URI.")
+              help="harness_benchmark WebSocket server URI.")
 @click.option("--username", required=True, help="Username to authenticate with.")
 @click.option("--log-level", default="WARNING", show_default=True,
               type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"], case_sensitive=False),
               help="Logging level (stderr).")
 def mcp(server_uri, username, log_level):
-    """Start an MCP server (stdio) that exposes aidle tools to an LLM."""
+    """Start an MCP server (stdio) that exposes harness_benchmark tools to an LLM."""
     logging.basicConfig(level=log_level.upper(),
                         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     mcp_server.run(server_uri, username=username)

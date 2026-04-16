@@ -1,7 +1,7 @@
-from aidle.challenges.base import BaseChallenge
-from aidle.challenges.file_editor import FileEditorChallenge
-from aidle.challenges.haystack import HaystackChallenge
-from aidle.challenges.maze import MazeChallenge
+from harness_benchmark.challenges.base import BaseChallenge
+from harness_benchmark.challenges.file_editor import FileEditorChallenge
+from harness_benchmark.challenges.haystack import HaystackChallenge
+from harness_benchmark.challenges.maze import MazeChallenge
 
 REGISTRY: dict[str, type[BaseChallenge]] = {
     MazeChallenge.slug: MazeChallenge,

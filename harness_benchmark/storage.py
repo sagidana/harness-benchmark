@@ -15,7 +15,7 @@ class UserStore:
 
     def __init__(self, base_dir: Path | str | None = None) -> None:
         if base_dir is None:
-            base_dir = Path.home() / ".aidle" / "users"
+            base_dir = Path.home() / ".harness_benchmark" / "users"
         self._dir = Path(base_dir)
         self._dir.mkdir(parents=True, exist_ok=True)
 

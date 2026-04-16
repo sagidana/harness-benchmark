@@ -1,11 +1,11 @@
-# aidle
+# harness-benchmark
 
 A CLI tool that runs a WebSocket challenge/game server implementing the [WCGP v1.0 protocol](docs/PROTOCOL.md).
 
 ## Installation
 
 ```bash
-pip install aidle
+pip install harness-benchmark
 ```
 
 Or for development:
@@ -16,12 +16,12 @@ pip install -e .
 
 ## Usage
 
-### `aidle serve`
+### `harness-benchmark serve`
 
 Start the WebSocket server:
 
 ```bash
-aidle serve
+harness-benchmark serve
 ```
 
 Options:
@@ -35,7 +35,7 @@ Options:
 Example:
 
 ```bash
-aidle serve --host 127.0.0.1 --port 9000 --log-level DEBUG
+harness-benchmark serve --host 127.0.0.1 --port 9000 --log-level DEBUG
 ```
 
 ## Protocol

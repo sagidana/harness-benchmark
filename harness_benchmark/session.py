@@ -6,7 +6,7 @@ import uuid
 from enum import Enum, auto
 from typing import Any
 
-from aidle.challenges.base import BaseChallenge, CostConfig
+from harness_benchmark.challenges.base import BaseChallenge, CostConfig
 
 
 class State(Enum):

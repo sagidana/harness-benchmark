@@ -4,7 +4,7 @@ import logging
 from collections import deque
 from typing import Any
 
-from aidle.client.base import WCGPClient
+from harness_benchmark.client.base import WCGPClient
 
 logger = logging.getLogger(__name__)
 

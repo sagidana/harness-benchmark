@@ -5,8 +5,8 @@ from pathlib import Path
 import websockets
 from websockets import ServerConnection
 
-from aidle.protocol import ProtocolHandler
-from aidle.storage import UserStore
+from harness_benchmark.protocol import ProtocolHandler
+from harness_benchmark.storage import UserStore
 
 logger = logging.getLogger(__name__)
 

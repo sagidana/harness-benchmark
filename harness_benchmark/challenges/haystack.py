@@ -4,7 +4,7 @@ import logging
 import random
 from typing import Any
 
-from aidle.challenges.base import (
+from harness_benchmark.challenges.base import (
     ActionDescriptor,
     ActionResult,
     BaseChallenge,

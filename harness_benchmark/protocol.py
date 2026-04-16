@@ -9,10 +9,10 @@ from typing import Any
 import websockets
 from websockets import ServerConnection
 
-from aidle.challenges import REGISTRY
-from aidle.challenges.base import ActionResult, BaseChallenge
-from aidle.session import Session, State
-from aidle.storage import UserStore
+from harness_benchmark.challenges import REGISTRY
+from harness_benchmark.challenges.base import ActionResult, BaseChallenge
+from harness_benchmark.session import Session, State
+from harness_benchmark.storage import UserStore
 
 logger = logging.getLogger(__name__)
 

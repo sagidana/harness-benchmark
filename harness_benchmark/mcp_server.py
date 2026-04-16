@@ -7,7 +7,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from aidle.client.base import WCGPClient
+from harness_benchmark.client.base import WCGPClient
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +44,9 @@ class _BufferingClient(WCGPClient):
 
 def create_mcp_server(server_uri: str, username: str | None = None) -> FastMCP:
     mcp = FastMCP(
-        "aidle",
+        "harness_benchmark",
         instructions=(
-            "You are connected to an aidle challenge server. "
+            "You are connected to an harness_benchmark challenge server. "
             "Use list_challenges to discover available challenges, "
             "join_challenge to enter one, get_available_actions to see what you can do, "
             "and perform_action to act. "
@@ -243,5 +243,5 @@ def create_mcp_server(server_uri: str, username: str | None = None) -> FastMCP:
 
 def run(server_uri: str, username: str | None = None) -> None:
     mcp_server = create_mcp_server(server_uri, username=username)
-    logger.info("Starting aidle MCP server (stdio) — connecting to %s", server_uri)
+    logger.info("Starting harness_benchmark MCP server (stdio) — connecting to %s", server_uri)
     mcp_server.run(transport="stdio")
