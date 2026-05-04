@@ -20,19 +20,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 CHARS_PER_TOKEN = 4
-TOKENS_PER_FRAGMENT = 10_000
-CHARS_PER_FRAGMENT = TOKENS_PER_FRAGMENT * CHARS_PER_TOKEN  # ~40 000
 TOKENS_PER_PAGE = 1_000
-CHARS_PER_PAGE = TOKENS_PER_PAGE * CHARS_PER_TOKEN  # ~4 000
+PAGES_PER_FRAGMENT = 3
+TOKENS_PER_FRAGMENT = PAGES_PER_FRAGMENT * TOKENS_PER_PAGE
+CHARS_PER_FRAGMENT = TOKENS_PER_FRAGMENT * CHARS_PER_TOKEN
+CHARS_PER_PAGE = TOKENS_PER_PAGE * CHARS_PER_TOKEN
 
 DIFFICULTY_CONFIGS: dict[str, dict[str, Any]] = {
-    "easy":   {"num_glyphs": 10, "num_fragments": 50,  "num_decoys": 5},
+    "easy":   {"num_glyphs": 10, "num_fragments": 5,  "num_decoys": 5},
     "medium": {"num_glyphs": 30, "num_fragments": 150, "num_decoys": 25},
     "hard":   {"num_glyphs": 50, "num_fragments": 250, "num_decoys": 50},
 }
-
-MAPPING_FRAGMENT_RATIO = 0.25
-MAX_MAPPINGS_PER_FRAGMENT = 2
 
 # ---------------------------------------------------------------------------
 # Glyph pool — 60 distinct Unicode symbols
@@ -401,34 +399,50 @@ def _encode_text(text: str, encoder: dict[str, list[str]], rng: random.Random) -
 class _FragmentMeta:
     id: str
     sub_seed: int
-    mappings: list[tuple[str, str]] = field(default_factory=list)
-    decoy_glyphs: list[str] = field(default_factory=list)
+    # page index (0-based, within this fragment) -> (glyph, unit)
+    page_mappings: dict[int, tuple[str, str]] = field(default_factory=dict)
+    # page index (0-based, within this fragment) -> decoy glyph
+    page_decoys: dict[int, str] = field(default_factory=dict)
 
 
-def _fragment_text(meta: _FragmentMeta) -> str:
-    """Generate full fragment text deterministically from sub_seed."""
-    rng = random.Random(meta.sub_seed)
-    prose = _generate_prose(rng, CHARS_PER_FRAGMENT)
+def _load_page_mappings(f: dict[str, Any]) -> dict[int, tuple[str, str]]:
+    # New format: {"page_mappings": {"0": [glyph, unit], ...}}
+    if "page_mappings" in f:
+        return {int(p): tuple(m) for p, m in f["page_mappings"].items()}
+    # Legacy format: {"mappings": [[glyph, unit], ...]} — pin each to a distinct page.
+    legacy = [tuple(m) for m in f.get("mappings", [])]
+    return {i: m for i, m in enumerate(legacy) if i < PAGES_PER_FRAGMENT}
 
-    if meta.mappings:
-        paras = prose.split("\n\n")
-        for glyph, unit in meta.mappings:
-            tmpl = rng.choice(_MAPPING_SENTENCES)
-            sentence = tmpl.format(glyph=glyph, unit=unit)
-            idx = rng.randint(0, len(paras) - 1)
-            paras[idx] += " " + sentence
-        prose = "\n\n".join(paras)
 
-    if meta.decoy_glyphs:
-        paras = prose.split("\n\n")
-        for g in meta.decoy_glyphs:
-            tmpl = rng.choice(_DECOY_SENTENCES)
-            sentence = tmpl.format(glyph=g, era=rng.choice(_FILLERS["era"]))
-            idx = rng.randint(0, len(paras) - 1)
-            paras[idx] += " " + sentence
-        prose = "\n\n".join(paras)
+def _load_page_decoys(f: dict[str, Any]) -> dict[int, str]:
+    if "page_decoys" in f:
+        return {int(p): g for p, g in f["page_decoys"].items()}
+    # Legacy format: {"decoy_glyphs": [glyph, ...]} — place on pages after any mappings.
+    legacy = list(f.get("decoy_glyphs", []))
+    start = min(len(f.get("mappings", [])), PAGES_PER_FRAGMENT)
+    return {start + i: g for i, g in enumerate(legacy) if start + i < PAGES_PER_FRAGMENT}
 
-    return prose
+
+def _fragment_page(meta: _FragmentMeta, page_idx: int) -> str:
+    """Generate one page of a fragment deterministically from (sub_seed, page_idx)."""
+    rng = random.Random(f"{meta.sub_seed}:{page_idx}")
+    prose = _generate_prose(rng, CHARS_PER_PAGE)
+    paras = prose.split("\n\n")
+
+    mapping = meta.page_mappings.get(page_idx)
+    if mapping is not None:
+        glyph, unit = mapping
+        sentence = rng.choice(_MAPPING_SENTENCES).format(glyph=glyph, unit=unit)
+        idx = rng.randint(0, len(paras) - 1)
+        paras[idx] += " " + sentence
+
+    decoy = meta.page_decoys.get(page_idx)
+    if decoy is not None:
+        sentence = rng.choice(_DECOY_SENTENCES).format(glyph=decoy, era=rng.choice(_FILLERS["era"]))
+        idx = rng.randint(0, len(paras) - 1)
+        paras[idx] += " " + sentence
+
+    return "\n\n".join(paras)
 
 
 def _build_fragments(
@@ -437,59 +451,60 @@ def _build_fragments(
     num_decoys: int,
     codebook: dict[str, str],
 ) -> list[_FragmentMeta]:
-    all_pairs = list(codebook.items())
-    num_mapping_frags = max(1, int(num_fragments * MAPPING_FRAGMENT_RATIO))
+    pairs = list(codebook.items())
+    rng.shuffle(pairs)
+    num_glyphs = len(pairs)
 
-    # Distribute pairs across mapping-fragment slots.
-    # First pass: one pair per slot (round-robin), second pass fills remaining capacity.
-    pair_slots: list[list[tuple[str, str]]] = [[] for _ in range(num_mapping_frags)]
-    shuffled_pairs = list(all_pairs)
-    rng.shuffle(shuffled_pairs)
-    first_pass = shuffled_pairs[:num_mapping_frags]
-    second_pass = shuffled_pairs[num_mapping_frags:]
-    for i, pair in enumerate(first_pass):
-        pair_slots[i % num_mapping_frags].append(pair)
-    for pair in second_pass:
-        assigned = False
-        for slot_i in range(num_mapping_frags):
-            if len(pair_slots[slot_i]) < MAX_MAPPINGS_PER_FRAGMENT:
-                pair_slots[slot_i].append(pair)
-                assigned = True
-                break
-        if not assigned:
-            logger.warning("[cipher_decoder] Could not assign pair %s to any slot", pair)
+    total_pages = num_fragments * PAGES_PER_FRAGMENT
+    if num_glyphs + num_decoys > total_pages:
+        raise ValueError(
+            f"num_fragments*PAGES_PER_FRAGMENT ({total_pages}) must be >= "
+            f"num_glyphs ({num_glyphs}) + num_decoys ({num_decoys}) so each mapping "
+            f"and decoy can occupy a distinct page."
+        )
+    if num_decoys > num_glyphs:
+        raise ValueError(
+            f"num_decoys ({num_decoys}) cannot exceed num_glyphs ({num_glyphs}); "
+            f"each decoy glyph must be distinct."
+        )
 
-    # Choose which fragment indices get mappings / decoys
-    indices = list(range(num_fragments))
-    rng.shuffle(indices)
-    mapping_indices = sorted(indices[:num_mapping_frags])
-    remaining = indices[num_mapping_frags:]
-    rng.shuffle(remaining)
-    decoy_indices = set(remaining[:num_decoys])
+    # Spread mappings evenly across all pages (global page index: 0 .. total_pages-1).
+    mapping_stride = total_pages / num_glyphs
+    mapping_pages = [int(i * mapping_stride) for i in range(num_glyphs)]
 
-    frag_to_pairs: dict[int, list[tuple[str, str]]] = {
-        mapping_indices[i]: pair_slots[i] for i in range(num_mapping_frags)
+    # Spread decoys evenly across the pages not used by mappings.
+    used = set(mapping_pages)
+    remaining_pages = [p for p in range(total_pages) if p not in used]
+    decoy_pages: list[int] = []
+    if num_decoys > 0:
+        decoy_stride = len(remaining_pages) / num_decoys
+        decoy_pages = [remaining_pages[int(i * decoy_stride)] for i in range(num_decoys)]
+
+    # Each decoy glyph appears at most once across the archive.
+    decoy_glyph_pool = list(codebook.keys())
+    rng.shuffle(decoy_glyph_pool)
+
+    page_mappings_by_frag: dict[int, dict[int, tuple[str, str]]] = {
+        i: {} for i in range(num_fragments)
     }
+    for i, global_page in enumerate(mapping_pages):
+        frag_idx, page_in_frag = divmod(global_page, PAGES_PER_FRAGMENT)
+        page_mappings_by_frag[frag_idx][page_in_frag] = pairs[i]
 
-    glyph_list = list(codebook.keys())
+    page_decoys_by_frag: dict[int, dict[int, str]] = {i: {} for i in range(num_fragments)}
+    for i, global_page in enumerate(decoy_pages):
+        frag_idx, page_in_frag = divmod(global_page, PAGES_PER_FRAGMENT)
+        page_decoys_by_frag[frag_idx][page_in_frag] = decoy_glyph_pool[i]
 
     fragments: list[_FragmentMeta] = []
     for frag_idx in range(num_fragments):
         meta = _FragmentMeta(
             id=f"frag-{frag_idx:05d}",
             sub_seed=rng.randint(0, 2**31 - 1),
-            mappings=frag_to_pairs.get(frag_idx, []),
-            decoy_glyphs=(
-                rng.sample(glyph_list, min(rng.randint(1, 2), len(glyph_list)))
-                if frag_idx in decoy_indices else []
-            ),
+            page_mappings=page_mappings_by_frag[frag_idx],
+            page_decoys=page_decoys_by_frag[frag_idx],
         )
         fragments.append(meta)
-
-    # Shuffle so mapping fragments are not clustered by index
-    rng.shuffle(fragments)
-    for i, f in enumerate(fragments):
-        f.id = f"frag-{i:05d}"
 
     return fragments
 
@@ -766,8 +781,8 @@ class CipherDecoderChallenge(BaseChallenge):
                 {
                     "id": f.id,
                     "sub_seed": f.sub_seed,
-                    "mappings": f.mappings,
-                    "decoy_glyphs": f.decoy_glyphs,
+                    "page_mappings": {str(p): list(m) for p, m in f.page_mappings.items()},
+                    "page_decoys": {str(p): g for p, g in f.page_decoys.items()},
                 }
                 for f in self._fragments
             ],
@@ -793,8 +808,8 @@ class CipherDecoderChallenge(BaseChallenge):
             _FragmentMeta(
                 id=f["id"],
                 sub_seed=f["sub_seed"],
-                mappings=[tuple(m) for m in f["mappings"]],
-                decoy_glyphs=f["decoy_glyphs"],
+                page_mappings=_load_page_mappings(f),
+                page_decoys=_load_page_decoys(f),
             )
             for f in data["fragments"]
         ]
@@ -892,9 +907,7 @@ class CipherDecoderChallenge(BaseChallenge):
             )
 
         meta = self._fragment_index[frag_id]
-        text = _fragment_text(meta)
-        total_chars = len(text)
-        total_pages = max(1, (total_chars + CHARS_PER_PAGE - 1) // CHARS_PER_PAGE)
+        total_pages = PAGES_PER_FRAGMENT
 
         page = max(1, int(payload.get("page", 1)))
         if page > total_pages:
@@ -911,8 +924,7 @@ class CipherDecoderChallenge(BaseChallenge):
                 invalid_reason="page_out_of_range",
             )
 
-        start = (page - 1) * CHARS_PER_PAGE
-        text_slice = text[start: start + CHARS_PER_PAGE]
+        text = _fragment_page(meta, page - 1)
 
         logger.info("[cipher_decoder] read_fragment %s page=%d/%d", frag_id, page, total_pages)
         return ActionResult(
@@ -920,7 +932,7 @@ class CipherDecoderChallenge(BaseChallenge):
                 "fragment_id": frag_id,
                 "page": page,
                 "total_pages": total_pages,
-                "text": text_slice,
+                "text": text,
             },
             base_cost=cost,
         )

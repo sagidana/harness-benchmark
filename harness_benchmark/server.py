@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 
 import websockets
-from websockets import ServerConnection
+from websockets.asyncio.server import ServerConnection, serve
 
 from harness_benchmark.protocol import ProtocolHandler
 from harness_benchmark.storage import UserStore
@@ -19,5 +19,5 @@ async def run(host: str, port: int, data_dir: Path | None = None) -> None:
         handler = ProtocolHandler(websocket, store)
         await handler.run()
 
-    async with websockets.serve(handle_client, host, port):
+    async with serve(handle_client, host, port):
         await asyncio.get_running_loop().create_future()  # run forever

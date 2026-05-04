@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import websockets
-from websockets import ServerConnection
+from websockets.asyncio.server import ServerConnection
 
 from harness_benchmark.challenges import REGISTRY
 from harness_benchmark.challenges.base import ActionResult, BaseChallenge
